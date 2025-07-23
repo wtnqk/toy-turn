@@ -1,0 +1,191 @@
+#+TITLE: Toy TURN Server
+#+AUTHOR: wtnqk
+#+DATE: 2025-07-23
+
+* TURNサーバー仕様
+
+** 概要
+TURN (Traversal Using Relays around NAT) は、NAT/ファイアウォール越しの通信を実現するためのプロトコルです。
+RFC 5766で定義されており、WebRTCなどのリアルタイム通信で広く使用されています。
+
+** 主要機能
+*** 1. アロケーション (Allocation)
+- クライアントはTURNサーバーにリレーアドレスの割り当てを要求
+- サーバーは一意のリレーアドレス（IP:ポート）を割り当て
+- タイムアウト管理（デフォルト: 10分）
+
+*** 2. パーミッション (Permission)
+- クライアントは特定のピアアドレスへの通信許可を設定
+- パーミッションの有効期限（デフォルト: 5分）
+- 自動更新または明示的な更新が必要
+
+*** 3. チャネルバインディング (Channel Binding)
+- 効率的なデータ転送のためのチャネル番号割り当て
+- オーバーヘッドの削減（4バイトヘッダー vs 36バイトヘッダー）
+
+*** 4. データリレー
+- Send/Data indication によるデータ転送
+- ChannelData メッセージによる効率的な転送
+
+** プロトコル仕様
+*** メッセージフォーマット
+- STUNメッセージフォーマット（RFC 5389）を使用
+- メッセージタイプ：Request, Indication, Success Response, Error Response
+- 属性ベースのメッセージ構造
+
+*** 主要メッセージタイプ
+1. Allocate Request/Response
+2. Refresh Request/Response
+3. CreatePermission Request/Response
+4. ChannelBind Request/Response
+5. Send Indication
+6. Data Indication
+7. ChannelData Message
+
+*** 認証メカニズム
+- Long-term credential mechanism
+- Message Integrity Check (HMAC-SHA1)
+- Nonce-based replay protection
+
+* 実装計画
+
+** フェーズ1: 基本機能実装（1-2週間）
+*** 1.1 プロジェクトセットアップ
+- Go言語での実装
+- 基本的なプロジェクト構造の作成
+- 依存関係の管理（go.mod）
+
+*** 1.2 STUNメッセージパーサー
+- STUNメッセージヘッダーのパース
+- 基本的な属性のパース/エンコード
+- メッセージ整合性チェック
+
+*** 1.3 基本的なアロケーション機能
+- Allocate Request/Responseの処理
+- リレーアドレスの管理
+- 基本的なタイムアウト処理
+
+** フェーズ2: 完全なTURN機能（1-2週間）
+*** 2.1 パーミッション管理
+- CreatePermission Request/Responseの実装
+- パーミッションのライフサイクル管理
+- 自動削除機能
+
+*** 2.2 データリレー機能
+- Send/Data Indicationの実装
+- 双方向データ転送
+- エラーハンドリング
+
+*** 2.3 チャネルバインディング
+- ChannelBind Request/Responseの実装
+- ChannelDataメッセージの処理
+- チャネル番号の管理
+
+** フェーズ3: 認証とセキュリティ（1週間）
+*** 3.1 認証機能
+- Long-term credential mechanismの実装
+- ユーザー管理システム
+- Nonceの生成と検証
+
+*** 3.2 セキュリティ機能
+- Rate limiting
+- DoS攻撃対策
+- ロギングとモニタリング
+
+** フェーズ4: 最適化とテスト（1週間）
+*** 4.1 パフォーマンス最適化
+- 並行処理の最適化
+- メモリ使用量の削減
+- ネットワークI/Oの効率化
+
+*** 4.2 テストスイート
+- 単体テスト
+- 統合テスト
+- 負荷テスト
+- 相互運用性テスト
+
+* ディレクトリ構造
+
+#+BEGIN_SRC
+toy-turn/
+├── cmd/
+│   └── turnserver/
+│       └── main.go          # メインエントリーポイント
+├── internal/
+│   ├── server/
+│   │   ├── server.go        # TURNサーバーのメイン実装
+│   │   └── config.go        # サーバー設定
+│   ├── stun/
+│   │   ├── message.go       # STUNメッセージ処理
+│   │   ├── attributes.go    # STUN属性
+│   │   └── parser.go        # メッセージパーサー
+│   ├── allocation/
+│   │   ├── manager.go       # アロケーション管理
+│   │   └── relay.go         # リレーアドレス処理
+│   ├── permission/
+│   │   └── manager.go       # パーミッション管理
+│   ├── channel/
+│   │   └── binding.go       # チャネルバインディング
+│   └── auth/
+│       ├── credentials.go   # 認証情報管理
+│       └── nonce.go         # Nonce管理
+├── pkg/
+│   └── utils/
+│       └── network.go       # ネットワークユーティリティ
+├── test/
+│   ├── unit/               # 単体テスト
+│   └── integration/        # 統合テスト
+├── configs/
+│   └── server.yaml         # サーバー設定ファイル
+├── go.mod
+├── go.sum
+├── Makefile
+└── README.org
+#+END_SRC
+
+* 技術スタック
+
+** 言語とフレームワーク
+- Go 1.21+
+- 標準ライブラリを最大限活用
+- 最小限の外部依存
+
+** 主要な技術選択
+- UDP/TCPソケットプログラミング
+- 並行処理（goroutines, channels）
+- コンテキストベースのキャンセレーション
+- 構造化ロギング（slog）
+
+** 開発ツール
+- golangci-lint（コード品質）
+- go test（テスト）
+- pprof（プロファイリング）
+- Makefile（ビルド自動化）
+
+* 実装の優先順位
+
+1. *最小動作実装* (MVP)
+   - 基本的なSTUNメッセージ処理
+   - シンプルなアロケーション機能
+   - 基本的なデータリレー
+
+2. *RFC準拠の実装*
+   - 全メッセージタイプのサポート
+   - 完全な属性サポート
+   - エラーハンドリング
+
+3. *プロダクション対応*
+   - 認証機能
+   - セキュリティ対策
+   - モニタリング機能
+
+4. *拡張機能*
+   - TCP/TLSサポート
+   - IPv6サポート
+   - 管理API
+
+* 参考資料
+
+- [[https://datatracker.ietf.org/doc/html/rfc5766][RFC 5766 - Traversal Using Relays around NAT (TURN)]]
+- [[https://datatracker.ietf.org/doc/html/rfc5389][RFC 5389 - Session Traversal Utilities for NAT (STUN)]]
+- [[https://datatracker.ietf.org/doc/html/rfc8656][RFC 8656 - Traversal Using Relays around NAT (TURN): Relay Extensions to Session Traversal Utilities for NAT (STUN)]]
