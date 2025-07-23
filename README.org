@@ -8,6 +8,57 @@
 TURN (Traversal Using Relays around NAT) は、NAT/ファイアウォール越しの通信を実現するためのプロトコルです。
 RFC 5766で定義されており、WebRTCなどのリアルタイム通信で広く使用されています。
 
+*** TURNの基本動作
+#+BEGIN_SRC
+    Client A                    TURN Server                    Client B
+       |                            |                             |
+       |                            |                             |
+   NAT/FW                           |                          NAT/FW
+       |                            |                             |
+       |--- 1. Allocate Request --->|                             |
+       |<-- 2. Allocate Response ---|                             |
+       |    (Relay Address)         |                             |
+       |                            |                             |
+       |--- 3. CreatePermission --->|                             |
+       |<-- 4. Permission Response -|                             |
+       |                            |                             |
+       |--- 5. Send Indication ---->|                             |
+       |    (to Client B)           |--- 6. Data Indication ----->|
+       |                            |    (from Relay Address)      |
+       |                            |                             |
+       |                            |<-- 7. Send Indication -------|
+       |<-- 8. Data Indication -----|    (to Relay Address)       |
+       |    (from Client B)         |                             |
+#+END_SRC
+
+*** アロケーションのライフサイクル
+#+BEGIN_SRC
+    Client                      TURN Server
+       |                            |
+       |--- Allocate Request ------>|
+       |    USERNAME                | 
+       |    REQUESTED-TRANSPORT     |
+       |                            |
+       |<-- Allocate Response ------|
+       |    XOR-RELAYED-ADDRESS     |
+       |    LIFETIME (600秒)        |
+       |    XOR-MAPPED-ADDRESS      |
+       |                            |
+       |                            | [タイマー開始]
+       |                            |
+       |--- Refresh Request ------->| (有効期限前に更新)
+       |    LIFETIME                |
+       |                            |
+       |<-- Refresh Response -------|
+       |    LIFETIME                | [タイマーリセット]
+       |                            |
+       |--- Refresh Request ------->| (LIFETIME=0で削除)
+       |    LIFETIME=0              |
+       |                            |
+       |<-- Refresh Response -------|
+       |                            | [アロケーション削除]
+#+END_SRC
+
 ** 主要機能
 *** 1. アロケーション (Allocation)
 - クライアントはTURNサーバーにリレーアドレスの割り当てを要求
@@ -27,11 +78,154 @@ RFC 5766で定義されており、WebRTCなどのリアルタイム通信で広
 - Send/Data indication によるデータ転送
 - ChannelData メッセージによる効率的な転送
 
+** TURNプロトコルフロー図
+
+*** 認証フロー
+#+BEGIN_SRC
+    Client                          TURN Server
+       |                                 |
+       |--- 1. Allocate Request -------->|
+       |    (認証情報なし)                |
+       |                                 |
+       |<-- 2. 401 Unauthorized ---------|
+       |    REALM                        |
+       |    NONCE                        |
+       |                                 |
+       |--- 3. Allocate Request -------->|
+       |    USERNAME                     |
+       |    REALM                        |
+       |    NONCE                        |
+       |    MESSAGE-INTEGRITY            |
+       |                                 |
+       |<-- 4. Allocate Success Response-|
+       |    XOR-RELAYED-ADDRESS          |
+       |    XOR-MAPPED-ADDRESS           |
+       |    LIFETIME                     |
+#+END_SRC
+
+*** チャネルバインディングフロー
+#+BEGIN_SRC
+    Client                          TURN Server                    Peer
+       |                                 |                          |
+       |--- 1. ChannelBind Request ----->|                          |
+       |    CHANNEL-NUMBER (0x4000)      |                          |
+       |    XOR-PEER-ADDRESS             |                          |
+       |                                 |                          |
+       |<-- 2. ChannelBind Response -----|                          |
+       |                                 |                          |
+       |                                 |                          |
+       |--- 3. ChannelData Message ----->|                          |
+       |    Ch# 0x4000 | Length | Data   |--- 4. UDP Packet ------>|
+       |    (4バイトヘッダーのみ)         |    (ピアへ直接送信)      |
+       |                                 |                          |
+       |                                 |<-- 5. UDP Packet --------|
+       |<-- 6. ChannelData Message ------|    (ピアから受信)        |
+       |    Ch# 0x4000 | Length | Data   |                          |
+#+END_SRC
+
+*** パーミッション管理
+#+BEGIN_SRC
+                    TURNサーバー内部状態
+    
+    アロケーション (Client A)
+    ├── リレーアドレス: 192.0.2.1:49152
+    ├── クライアントアドレス: 10.0.0.1:54321
+    ├── 有効期限: 600秒
+    └── パーミッション
+        ├── Peer B (203.0.113.1) - 有効期限: 300秒
+        ├── Peer C (203.0.113.2) - 有効期限: 150秒
+        └── Peer D (203.0.113.3) - 期限切れ [削除予定]
+    
+    チャネルバインディング
+    ├── Channel 0x4000 → Peer B (203.0.113.1)
+    └── Channel 0x4001 → Peer C (203.0.113.2)
+#+END_SRC
+
 ** プロトコル仕様
-*** メッセージフォーマット
-- STUNメッセージフォーマット（RFC 5389）を使用
-- メッセージタイプ：Request, Indication, Success Response, Error Response
-- 属性ベースのメッセージ構造
+*** STUNメッセージフォーマット
+#+BEGIN_SRC
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0 0|     STUN Message Type     |         Message Length        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Magic Cookie                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
+|                     Transaction ID (96 bits)                  |
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+#+END_SRC
+
+- 最初の2ビット: 必ず00
+- Message Type (14ビット): メソッドとクラスをエンコード
+- Message Length (16ビット): ヘッダー後のメッセージ長（4バイト境界）
+- Magic Cookie (32ビット): 0x2112A442
+- Transaction ID (96ビット): リクエスト/レスポンスの関連付け
+
+*** TURNメッセージタイプ
+|----------+----------|
+| メソッド | 値       |
+|----------+----------|
+| Binding  | 0x0001   |
+| Allocate | 0x0003   |
+| Refresh  | 0x0004   |
+| Send     | 0x0006   |
+| Data     | 0x0007   |
+| CreatePermission | 0x0008 |
+| ChannelBind | 0x0009 |
+|----------+----------|
+
+*** STUN属性フォーマット
+#+BEGIN_SRC
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         Type                  |            Length             |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Value (variable)                ....
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+#+END_SRC
+
+*** 主要なTURN属性
+|----------+---------|
+| 属性名   | タイプ  |
+|----------+---------|
+| MAPPED-ADDRESS | 0x0001 |
+| USERNAME | 0x0006 |
+| MESSAGE-INTEGRITY | 0x0008 |
+| ERROR-CODE | 0x0009 |
+| UNKNOWN-ATTRIBUTES | 0x000A |
+| REALM | 0x0014 |
+| NONCE | 0x0015 |
+| XOR-RELAYED-ADDRESS | 0x0016 |
+| REQUESTED-TRANSPORT | 0x0019 |
+| XOR-MAPPED-ADDRESS | 0x0020 |
+| LIFETIME | 0x000D |
+| XOR-PEER-ADDRESS | 0x0012 |
+| DATA | 0x0013 |
+| CHANNEL-NUMBER | 0x000C |
+|----------+---------|
+
+*** ChannelDataメッセージフォーマット
+#+BEGIN_SRC
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         Channel Number        |            Length             |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
+/                       Application Data                        /
+/                                                               /
+|                                                               |
+|                               +-------------------------------+
+|                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+#+END_SRC
+
+- Channel Number: 0x4000-0x7FFF (最上位2ビットは01)
+- Length: アプリケーションデータの長さ
+- 4バイト境界へのパディングが必要
 
 *** 主要メッセージタイプ
 1. Allocate Request/Response
@@ -47,62 +241,105 @@ RFC 5766で定義されており、WebRTCなどのリアルタイム通信で広
 - Message Integrity Check (HMAC-SHA1)
 - Nonce-based replay protection
 
-* 実装計画
+* TURNサーバー実装アーキテクチャ
 
-** フェーズ1: 基本機能実装（1-2週間）
-*** 1.1 プロジェクトセットアップ
-- Go言語での実装
-- 基本的なプロジェクト構造の作成
-- 依存関係の管理（go.mod）
+** コア機能の実装構造
+*** STUNメッセージ処理
+- STUNメッセージヘッダーのパース実装
+- 属性のエンコード/デコード
+- メッセージ整合性検証（HMAC-SHA1）
+- フィンガープリント計算
 
-*** 1.2 STUNメッセージパーサー
-- STUNメッセージヘッダーのパース
-- 基本的な属性のパース/エンコード
-- メッセージ整合性チェック
+*** アロケーション管理
+- リレーアドレスプールの管理
+- アロケーションのライフサイクル管理
+- タイムアウト処理とガベージコレクション
+- 5-tupleベースのアロケーション識別
 
-*** 1.3 基本的なアロケーション機能
-- Allocate Request/Responseの処理
-- リレーアドレスの管理
-- 基本的なタイムアウト処理
+*** パーミッション処理
+- IPアドレスベースのパーミッション管理
+- タイムスタンプベースの有効期限管理
+- パーミッションリフレッシュ機構
 
-** フェーズ2: 完全なTURN機能（1-2週間）
-*** 2.1 パーミッション管理
-- CreatePermission Request/Responseの実装
-- パーミッションのライフサイクル管理
-- 自動削除機能
+*** チャネルバインディング
+- チャネル番号（0x4000-0x7FFF）の割り当て
+- ピアアドレスとチャネル番号のマッピング
+- チャネルデータのヘッダー変換
 
-*** 2.2 データリレー機能
-- Send/Data Indicationの実装
-- 双方向データ転送
-- エラーハンドリング
+*** データリレー機構
+- UDP/TCPソケット管理
+- 非同期I/O処理
+- バッファ管理とフロー制御
+- エラー伝播とリカバリー
 
-*** 2.3 チャネルバインディング
-- ChannelBind Request/Responseの実装
-- ChannelDataメッセージの処理
-- チャネル番号の管理
+* TURNサーバーアーキテクチャ図
 
-** フェーズ3: 認証とセキュリティ（1週間）
-*** 3.1 認証機能
-- Long-term credential mechanismの実装
-- ユーザー管理システム
-- Nonceの生成と検証
+** システム全体構成
+#+BEGIN_SRC
+                           インターネット
+                               │
+                    ┌──────────┴──────────┐
+                    │    TURNサーバー      │
+                    │  (パブリックIP)      │
+                    │                      │
+                    │  ┌───────────────┐  │
+                    │  │ Allocation    │  │
+                    │  │   Manager     │  │
+                    │  └───────┬───────┘  │
+                    │          │          │
+                    │  ┌───────┴───────┐  │
+                    │  │  Permission   │  │
+                    │  │   Manager     │  │
+                    │  └───────┬───────┘  │
+                    │          │          │
+                    │  ┌───────┴───────┐  │
+                    │  │   Channel     │  │
+                    │  │   Binding     │  │
+                    │  └───────┬───────┘  │
+                    │          │          │
+                    │  ┌───────┴───────┐  │
+                    │  │    Relay      │  │
+                    │  │   Engine      │  │
+                    │  └───────────────┘  │
+                    └──────┬───────┬──────┘
+                           │       │
+                    ┌──────┴───┐ ┌─┴──────┐
+                    │  NAT A   │ │  NAT B │
+                    └──────┬───┘ └─┬──────┘
+                           │       │
+                    ┌──────┴───┐ ┌─┴──────┐
+                    │ Client A │ │Client B│
+                    └──────────┘ └────────┘
+#+END_SRC
 
-*** 3.2 セキュリティ機能
-- Rate limiting
-- DoS攻撃対策
-- ロギングとモニタリング
-
-** フェーズ4: 最適化とテスト（1週間）
-*** 4.1 パフォーマンス最適化
-- 並行処理の最適化
-- メモリ使用量の削減
-- ネットワークI/Oの効率化
-
-*** 4.2 テストスイート
-- 単体テスト
-- 統合テスト
-- 負荷テスト
-- 相互運用性テスト
+** 内部データフロー
+#+BEGIN_SRC
+    受信パケット
+         │
+    ┌────▼────┐
+    │  解析   │──→ STUNメッセージ？ ──No──→ ChannelData？
+    └────┬────┘                              │
+         │Yes                                │Yes
+    ┌────▼────┐                         ┌────▼────┐
+    │  認証   │                         │チャネル │
+    │  検証   │                         │ 検証    │
+    └────┬────┘                         └────┬────┘
+         │                                   │
+    ┌────▼────┐                         ┌────▼────┐
+    │メッセージ│                         │ データ  │
+    │ 処理    │                         │ リレー  │
+    └────┬────┘                         └─────────┘
+         │
+    ┌────▼──────────┐
+    │               │
+    │  ・Allocate   │
+    │  ・Refresh    │
+    │  ・Permission │
+    │  ・ChannelBind│
+    │  ・Send       │
+    │               │
+    └───────────────┘
+#+END_SRC
 
 * ディレクトリ構造
 
@@ -143,46 +380,54 @@ toy-turn/
 └── README.org
 #+END_SRC
 
-* 技術スタック
+* 実装における技術的考慮事項
 
-** 言語とフレームワーク
-- Go 1.21+
-- 標準ライブラリを最大限活用
-- 最小限の外部依存
+** ネットワーク層の実装
+- UDP/TCPソケットの多重化
+- ノンブロッキングI/O
+- SO_REUSEPORTによる負荷分散
+- エフェメラルポートの管理
 
-** 主要な技術選択
-- UDP/TCPソケットプログラミング
-- 並行処理（goroutines, channels）
-- コンテキストベースのキャンセレーション
-- 構造化ロギング（slog）
+** 並行性とスケーラビリティ
+- コネクションごとの独立した処理
+- ロックフリーデータ構造の活用
+- メモリプールによるアロケーション削減
+- バックプレッシャー制御
 
-** 開発ツール
-- golangci-lint（コード品質）
-- go test（テスト）
-- pprof（プロファイリング）
-- Makefile（ビルド自動化）
+** セキュリティ実装
+- タイミング攻撃への対策
+- リソース枯渇攻撃の防御
+- 認証トークンの安全な管理
+- 監査ログの実装
 
-* 実装の優先順位
+* プロトコル準拠性
 
-1. *最小動作実装* (MVP)
-   - 基本的なSTUNメッセージ処理
-   - シンプルなアロケーション機能
-   - 基本的なデータリレー
+** RFC 5766 必須要件
+- STUN Binding Request/Response
+- Allocate Request/Response with authentication
+- Refresh Request/Response
+- CreatePermission Request/Response
+- ChannelBind Request/Response
+- Send/Data Indication
+- ChannelData messages
 
-2. *RFC準拠の実装*
-   - 全メッセージタイプのサポート
-   - 完全な属性サポート
-   - エラーハンドリング
+** エラー処理仕様
+- 400 Bad Request
+- 401 Unauthorized
+- 420 Unknown Attribute
+- 437 Allocation Mismatch
+- 438 Stale Nonce
+- 441 Wrong Credentials
+- 442 Unsupported Transport Protocol
+- 443 Allocation Quota Reached
+- 486 Allocation Quota Reached
+- 508 Insufficient Capacity
 
-3. *プロダクション対応*
-   - 認証機能
-   - セキュリティ対策
-   - モニタリング機能
-
-4. *拡張機能*
-   - TCP/TLSサポート
-   - IPv6サポート
-   - 管理API
+** 拡張仕様のサポート
+- RFC 8656 - TURN Relay Extensions
+- DTLS-SRTP support
+- TCP allocations
+- IPv6 support
 
 * 参考資料
 
