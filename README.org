@@ -341,45 +341,6 @@ RFC 5766で定義されており、WebRTCなどのリアルタイム通信で広
     └───────────────┘
 #+END_SRC
 
-* ディレクトリ構造
-
-#+BEGIN_SRC
-toy-turn/
-├── cmd/
-│   └── turnserver/
-│       └── main.go          # メインエントリーポイント
-├── internal/
-│   ├── server/
-│   │   ├── server.go        # TURNサーバーのメイン実装
-│   │   └── config.go        # サーバー設定
-│   ├── stun/
-│   │   ├── message.go       # STUNメッセージ処理
-│   │   ├── attributes.go    # STUN属性
-│   │   └── parser.go        # メッセージパーサー
-│   ├── allocation/
-│   │   ├── manager.go       # アロケーション管理
-│   │   └── relay.go         # リレーアドレス処理
-│   ├── permission/
-│   │   └── manager.go       # パーミッション管理
-│   ├── channel/
-│   │   └── binding.go       # チャネルバインディング
-│   └── auth/
-│       ├── credentials.go   # 認証情報管理
-│       └── nonce.go         # Nonce管理
-├── pkg/
-│   └── utils/
-│       └── network.go       # ネットワークユーティリティ
-├── test/
-│   ├── unit/               # 単体テスト
-│   └── integration/        # 統合テスト
-├── configs/
-│   └── server.yaml         # サーバー設定ファイル
-├── go.mod
-├── go.sum
-├── Makefile
-└── README.org
-#+END_SRC
-
 * 実装における技術的考慮事項
 
 ** ネットワーク層の実装
